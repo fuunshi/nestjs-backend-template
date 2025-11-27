@@ -1,0 +1,244 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==================== ENUMS ====================
+
+enum Role {
+  USER
+  ADMIN
+  MODERATOR
+  SUPER_ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum TokenType {
+  ACCESS
+  REFRESH
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  PASSWORD_CHANGE
+  ROLE_CHANGE
+  TOKEN_REVOKE
+}
+
+// ==================== USER MODEL ====================
+
+model User {
+  id                    String        @id @default(uuid())
+  email                 String        @unique
+  password              String
+  role                  Role          @default(USER)
+  status                AccountStatus @default(PENDING_VERIFICATION)
+  isActive              Boolean       @default(true)
+  emailVerified         Boolean       @default(false)
+  emailVerifiedAt       DateTime?
+  phoneVerified         Boolean       @default(false)
+  phoneVerifiedAt       DateTime?
+  twoFactorEnabled      Boolean       @default(false)
+  twoFactorSecret       String?
+  passwordChangedAt     DateTime?
+  lastLoginAt           DateTime?
+  lastLoginIp           String?
+  failedLoginAttempts   Int           @default(0)
+  lockedUntil           DateTime?
+  deletedAt             DateTime?     // Soft delete
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  // Relations
+  profile               UserProfile?
+  tokens                Token[]
+  loginHistory          LoginHistory[]
+  auditLogs             AuditLog[]    @relation("AuditLogUser")
+  performedAuditLogs    AuditLog[]    @relation("AuditLogPerformedBy")
+  requestLogs           RequestLog[]
+
+  @@index([email])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+// ==================== USER PROFILE MODEL (OTO) ====================
+
+model UserProfile {
+  id              String    @id @default(uuid())
+  userId          String    @unique
+  firstName       String
+  lastName        String?
+  displayName     String?
+  avatar          String?
+  bio             String?   @db.Text
+  phoneNumber     String?   @unique
+  dateOfBirth     DateTime?
+  gender          String?
+  country         String?
+  state           String?
+  city            String?
+  address         String?   @db.Text
+  postalCode      String?
+  timezone        String?   @default("UTC")
+  language        String?   @default("en")
+  currency        String?   @default("USD")
+  website         String?
+  socialLinks     Json?     // Store social media links as JSON
+  preferences     Json?     // Store user preferences as JSON
+  metadata        Json?     // Additional metadata
+  deletedAt       DateTime? // Soft delete
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([phoneNumber])
+  @@index([deletedAt])
+}
+
+// ==================== TOKEN MODEL (For Revocation) ====================
+
+model Token {
+  id            String    @id @default(uuid())
+  userId        String
+  token         String    @unique @db.VarChar(500)
+  tokenHash     String    @unique // Store hash of token for lookup
+  type          TokenType
+  expiresAt     DateTime
+  revokedAt     DateTime? // For instant token invalidation
+  revokedReason String?
+  deviceInfo    String?   @db.Text
+  ipAddress     String?
+  userAgent     String?
+  deletedAt     DateTime? // Soft delete
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([type])
+  @@index([expiresAt])
+  @@index([revokedAt])
+  @@index([deletedAt])
+}
+
+// ==================== LOGIN HISTORY MODEL ====================
+
+model LoginHistory {
+  id            String    @id @default(uuid())
+  userId        String
+  loginAt       DateTime  @default(now())
+  logoutAt      DateTime?
+  ipAddress     String?
+  userAgent     String?
+  deviceType    String?
+  browser       String?
+  os            String?
+  location      String?
+  latitude      Float?
+  longitude     Float?
+  isSuccessful  Boolean   @default(true)
+  failureReason String?
+  sessionDuration Int?    // in seconds
+  deletedAt     DateTime? // Soft delete
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, loginAt])
+  @@index([deletedAt])
+}
+
+// ==================== AUDIT LOG MODEL ====================
+
+model AuditLog {
+  id            String      @id @default(uuid())
+  userId        String?     // The user affected
+  performedById String?     // The user who performed the action
+  action        AuditAction
+  entityType    String      // e.g., "User", "UserProfile", "Token"
+  entityId      String?     // ID of the affected entity
+  oldValues     Json?       // Previous state
+  newValues     Json?       // New state
+  changes       Json?       // Specific changes made
+  ipAddress     String?
+  userAgent     String?
+  requestId     String?     // Link to request log
+  metadata      Json?       // Additional context
+  deletedAt     DateTime?   // Soft delete
+  createdAt     DateTime    @default(now())
+
+  // Relations
+  user          User?       @relation("AuditLogUser", fields: [userId], references: [id], onDelete: SetNull)
+  performedBy   User?       @relation("AuditLogPerformedBy", fields: [performedById], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([performedById])
+  @@index([action])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+// ==================== REQUEST LOG MODEL ====================
+
+model RequestLog {
+  id            String    @id @default(uuid())
+  requestId     String    @unique // UUID for tracking
+  userId        String?   // Null for unauthenticated requests
+  method        String    // GET, POST, PUT, DELETE, etc.
+  path          String
+  query         Json?     // Query parameters
+  body          Json?     // Request body (sanitized)
+  headers       Json?     // Request headers (sanitized)
+  statusCode    Int?
+  responseTime  Int?      // in milliseconds
+  ipAddress     String?
+  userAgent     String?
+  errorMessage  String?   @db.Text
+  errorStack    String?   @db.Text
+  deletedAt     DateTime? // Soft delete
+  createdAt     DateTime  @default(now())
+
+  // Relations
+  user          User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([requestId])
+  @@index([userId])
+  @@index([method])
+  @@index([path])
+  @@index([statusCode])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
